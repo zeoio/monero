@@ -32,7 +32,6 @@
 
 #include "misc_language.h"
 #include "portable_storage_base.h"
-#include "portable_storage_to_bin.h"
 #include "portable_storage_from_bin.h"
 #include "portable_storage_to_json.h"
 #include "portable_storage_from_json.h"
@@ -42,6 +41,7 @@
 
 namespace epee
 {
+  class byte_slice;
   namespace serialization
   {
     /************************************************************************/
@@ -83,7 +83,7 @@ namespace epee
       bool        delete_entry(const std::string& pentry_name, hsection hparent_section = nullptr);
 
       //-------------------------------------------------------------------------------
-      bool		store_to_binary(binarybuffer& target);
+      bool		store_to_binary(byte_slice& target, std::size_t initial_buffer_size = 8192);
       bool		load_from_binary(const epee::span<const uint8_t> target);
       bool		load_from_binary(const std::string& target) { return load_from_binary(epee::strspan<uint8_t>(target)); }
       template<class trace_policy>
@@ -132,22 +132,6 @@ namespace epee
     bool portable_storage::dump_as_xml(std::string& targetObj, const std::string& root_name)
     {
       return false;//TODO: don't think i ever again will use xml - ambiguous and "overtagged" format
-    }
-
-    inline
-    bool portable_storage::store_to_binary(binarybuffer& target)
-    {
-      TRY_ENTRY();
-      std::stringstream ss;
-      storage_block_header sbh = AUTO_VAL_INIT(sbh);
-      sbh.m_signature_a = SWAP32LE(PORTABLE_STORAGE_SIGNATUREA);
-      sbh.m_signature_b = SWAP32LE(PORTABLE_STORAGE_SIGNATUREB);
-      sbh.m_ver = PORTABLE_STORAGE_FORMAT_VER;
-      ss.write((const char*)&sbh, sizeof(storage_block_header));
-      pack_entry_to_buff(ss, m_root);
-      target = ss.str();
-      return true;
-      CATCH_ENTRY("portable_storage::store_to_binary", false)
     }
     inline
     bool portable_storage::load_from_binary(const epee::span<const uint8_t> source)
@@ -282,6 +266,7 @@ namespace epee
       static_assert(std::is_rvalue_reference<entry_type&&>(), "unexpected copy of value");
       TRY_ENTRY();
       CHECK_AND_ASSERT(psection, nullptr);
+      CHECK_AND_ASSERT(!pentry_name.empty(), nullptr);
       auto ins_res = psection->m_entries.emplace(pentry_name, std::forward<entry_type>(entry));
       return &ins_res.first->second;
       CATCH_ENTRY("portable_storage::insert_new_entry_get_storage_entry", nullptr);

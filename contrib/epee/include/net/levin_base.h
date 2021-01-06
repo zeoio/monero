@@ -31,7 +31,6 @@
 
 #include <cstdint>
 
-#include "byte_slice.h"
 #include "net_utils_base.h"
 #include "span.h"
 
@@ -39,6 +38,7 @@
 
 namespace epee
 {
+class byte_slice;
 namespace levin
 {
 #pragma pack(push)
@@ -72,7 +72,8 @@ namespace levin
 
 
 #define LEVIN_DEFAULT_TIMEOUT_PRECONFIGURED 0
-#define LEVIN_DEFAULT_MAX_PACKET_SIZE 100000000      //100MB by default
+#define LEVIN_INITIAL_MAX_PACKET_SIZE  256*1024      // 256 KiB before handshake
+#define LEVIN_DEFAULT_MAX_PACKET_SIZE 100000000      //100MB by default after handshake
 
 #define LEVIN_PACKET_REQUEST			0x00000001
 #define LEVIN_PACKET_RESPONSE		0x00000002
@@ -86,7 +87,7 @@ namespace levin
   template<class t_connection_context = net_utils::connection_context_base>
   struct levin_commands_handler
   {
-    virtual int invoke(int command, const epee::span<const uint8_t> in_buff, std::string& buff_out, t_connection_context& context)=0;
+    virtual int invoke(int command, const epee::span<const uint8_t> in_buff, byte_slice& buff_out, t_connection_context& context)=0;
     virtual int notify(int command, const epee::span<const uint8_t> in_buff, t_connection_context& context)=0;
     virtual void callback(t_connection_context& context){};
 

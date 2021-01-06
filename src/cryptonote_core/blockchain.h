@@ -51,6 +51,7 @@
 #include "string_tools.h"
 #include "rolling_median.h"
 #include "cryptonote_basic/cryptonote_basic.h"
+#include "common/powerof.h"
 #include "common/util.h"
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
 #include "rpc/core_rpc_server_commands_defs.h"
@@ -376,10 +377,12 @@ namespace cryptonote
      * for a block with the given hash
      *
      * @param id the hash to search for
+     * @param where the type of block, if non NULL
      *
      * @return true if the block is known, else false
      */
-    bool have_block(const crypto::hash& id) const;
+    bool have_block_unlocked(const crypto::hash& id, int *where = NULL) const;
+    bool have_block(const crypto::hash& id, int *where = NULL) const;
 
     /**
      * @brief gets the total number of transactions on the main chain
@@ -464,11 +467,12 @@ namespace cryptonote
      * @param total_height return-by-reference our current blockchain height
      * @param start_height return-by-reference the height of the first block returned
      * @param pruned whether to return full or pruned tx blobs
-     * @param max_count the max number of blocks to get
+     * @param max_block_count the max number of blocks to get
+     * @param max_tx_count the max number of txes to get (it can get overshot by the last block's number of txes minus 1)
      *
      * @return true if a block found in common or req_start_block specified, else false
      */
-    bool find_blockchain_supplement(const uint64_t req_start_block, const std::list<crypto::hash>& qblock_ids, std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::pair<crypto::hash, cryptonote::blobdata> > > >& blocks, uint64_t& total_height, uint64_t& start_height, bool pruned, bool get_miner_tx_hash, size_t max_count) const;
+    bool find_blockchain_supplement(const uint64_t req_start_block, const std::list<crypto::hash>& qblock_ids, std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::pair<crypto::hash, cryptonote::blobdata> > > >& blocks, uint64_t& total_height, uint64_t& start_height, bool pruned, bool get_miner_tx_hash, size_t max_block_count, size_t max_tx_count) const;
 
     /**
      * @brief retrieves a set of blocks and their transactions, and possibly other transactions
@@ -591,7 +595,10 @@ namespace cryptonote
      *
      * @return the fee quantized mask
      */
-    static uint64_t get_fee_quantization_mask();
+    static uint64_t get_fee_quantization_mask()
+    {
+      return tools::PowerOf<10, CRYPTONOTE_DISPLAY_DECIMAL_POINT - PER_KB_FEE_QUANTIZATION_DECIMALS>::Value;
+    }
 
     /**
      * @brief get dynamic per kB or byte fee for a given block weight

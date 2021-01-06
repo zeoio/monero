@@ -2701,7 +2701,7 @@ bool Blockchain::find_blockchain_supplement(const std::list<crypto::hash>& qbloc
 // find split point between ours and foreign blockchain (or start at
 // blockchain height <req_start_block>), and return up to max_count FULL
 // blocks by reference.
-bool Blockchain::find_blockchain_supplement(const uint64_t req_start_block, const std::list<crypto::hash>& qblock_ids, std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::pair<crypto::hash, cryptonote::blobdata> > > >& blocks, uint64_t& total_height, uint64_t& start_height, bool pruned, bool get_miner_tx_hash, size_t max_count) const
+bool Blockchain::find_blockchain_supplement(const uint64_t req_start_block, const std::list<crypto::hash>& qblock_ids, std::vector<std::pair<std::pair<cryptonote::blobdata, crypto::hash>, std::vector<std::pair<crypto::hash, cryptonote::blobdata> > > >& blocks, uint64_t& total_height, uint64_t& start_height, bool pruned, bool get_miner_tx_hash, size_t max_block_count, size_t max_tx_count) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
@@ -2726,8 +2726,8 @@ bool Blockchain::find_blockchain_supplement(const uint64_t req_start_block, cons
 
   db_rtxn_guard rtxn_guard(m_db);
   total_height = get_current_blockchain_height();
-  blocks.reserve(std::min(std::min(max_count, (size_t)10000), (size_t)(total_height - start_height)));
-  CHECK_AND_ASSERT_MES(m_db->get_blocks_from(start_height, 3, max_count, FIND_BLOCKCHAIN_SUPPLEMENT_MAX_SIZE, blocks, pruned, true, get_miner_tx_hash),
+  blocks.reserve(std::min(std::min(max_block_count, (size_t)10000), (size_t)(total_height - start_height)));
+  CHECK_AND_ASSERT_MES(m_db->get_blocks_from(start_height, 3, max_block_count, max_tx_count, FIND_BLOCKCHAIN_SUPPLEMENT_MAX_SIZE, blocks, pruned, true, get_miner_tx_hash),
       false, "Error getting blocks");
 
   return true;
@@ -2758,30 +2758,42 @@ void Blockchain::flush_invalid_blocks()
   m_invalid_blocks.clear();
 }
 //------------------------------------------------------------------
-bool Blockchain::have_block(const crypto::hash& id) const
+bool Blockchain::have_block_unlocked(const crypto::hash& id, int *where) const
 {
+  // WARNING: this function does not take m_blockchain_lock, and thus should only call read only
+  // m_db functions which do not depend on one another (ie, no getheight + gethash(height-1), as
+  // well as not accessing class members, even read only (ie, m_invalid_blocks). The caller must
+  // lock if it is otherwise needed.
   LOG_PRINT_L3("Blockchain::" << __func__);
-  CRITICAL_REGION_LOCAL(m_blockchain_lock);
 
   if(m_db->block_exists(id))
   {
     LOG_PRINT_L2("block " << id << " found in main chain");
+    if (where) *where = HAVE_BLOCK_MAIN_CHAIN;
     return true;
   }
 
   if(m_db->get_alt_block(id, NULL, NULL))
   {
     LOG_PRINT_L2("block " << id << " found in alternative chains");
+    if (where) *where = HAVE_BLOCK_ALT_CHAIN;
     return true;
   }
 
   if(m_invalid_blocks.count(id))
   {
     LOG_PRINT_L2("block " << id << " found in m_invalid_blocks");
+    if (where) *where = HAVE_BLOCK_INVALID;
     return true;
   }
 
   return false;
+}
+//------------------------------------------------------------------
+bool Blockchain::have_block(const crypto::hash& id, int *where) const
+{
+  CRITICAL_REGION_LOCAL(m_blockchain_lock);
+  return have_block_unlocked(id, where);
 }
 //------------------------------------------------------------------
 bool Blockchain::handle_block_to_main_chain(const block& bl, block_verification_context& bvc, bool notify/* = true*/)
@@ -3138,14 +3150,6 @@ bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_pr
       {
         rv.mixRing[n].push_back(pubkeys[n][m]);
       }
-    }
-  }
-  else if (rv.type == rct::RCTTypeCLSAG)
-  {
-    CHECK_AND_ASSERT_MES(rv.p.CLSAGs.size() == tx.vin.size(), false, "Bad CLSAGs size");
-    for (size_t n = 0; n < tx.vin.size(); ++n)
-    {
-      rv.p.CLSAGs[n].I = rct::ki2rct(boost::get<txin_to_key>(tx.vin[n]).k_image);
     }
   }
   else
@@ -3626,19 +3630,6 @@ void Blockchain::check_ring_signature(const crypto::hash &tx_prefix_hash, const 
   }
 
   result = crypto::check_ring_signature(tx_prefix_hash, key_image, p_output_keys, sig.data()) ? 1 : 0;
-}
-
-//------------------------------------------------------------------
-uint64_t Blockchain::get_fee_quantization_mask()
-{
-  static uint64_t mask = 0;
-  if (mask == 0)
-  {
-    mask = 1;
-    for (size_t n = PER_KB_FEE_QUANTIZATION_DECIMALS; n < CRYPTONOTE_DISPLAY_DECIMAL_POINT; ++n)
-      mask *= 10;
-  }
-  return mask;
 }
 
 //------------------------------------------------------------------
@@ -4736,6 +4727,8 @@ uint64_t Blockchain::prevalidate_block_hashes(uint64_t height, const std::vector
   // pre: A A A A B B B B C C C C D D D D
 
   CHECK_AND_ASSERT_MES(weights.empty() || weights.size() == hashes.size(), 0, "Unexpected weights size");
+
+  CRITICAL_REGION_LOCAL(m_blockchain_lock);
 
   // easy case: height >= hashes
   if (height >= m_blocks_hash_of_hashes.size() * HASH_OF_HASHES_STEP)

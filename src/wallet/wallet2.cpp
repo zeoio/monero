@@ -1158,6 +1158,7 @@ wallet2::wallet2(network_type nettype, uint64_t kdf_rounds, bool unattended, std
   m_explicit_refresh_from_block_height(true),
   m_confirm_non_default_ring_size(true),
   m_ask_password(AskPasswordToDecrypt),
+  m_max_reorg_depth(ORPHANED_BLOCKS_MAX_COUNT),
   m_min_output_count(0),
   m_min_output_value(0),
   m_merge_destinations(false),
@@ -2961,6 +2962,9 @@ void wallet2::update_pool_state(std::vector<std::tuple<cryptonote::transaction, 
   MTRACE("update_pool_state got pool");
 
   // remove any pending tx that's not in the pool
+  // TODO: set tx_propagation_timeout to CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE * 3 / 2 after v15 hardfork
+  constexpr const std::chrono::seconds tx_propagation_timeout{500};
+  const auto now = std::chrono::system_clock::now();
   std::unordered_map<crypto::hash, wallet2::unconfirmed_transfer_details>::iterator it = m_unconfirmed_txs.begin();
   while (it != m_unconfirmed_txs.end())
   {
@@ -2988,9 +2992,11 @@ void wallet2::update_pool_state(std::vector<std::tuple<cryptonote::transaction, 
         LOG_PRINT_L1("Pending txid " << txid << " not in pool, marking as not in pool");
         pit->second.m_state = wallet2::unconfirmed_transfer_details::pending_not_in_pool;
       }
-      else if (pit->second.m_state == wallet2::unconfirmed_transfer_details::pending_not_in_pool && refreshed)
+      else if (pit->second.m_state == wallet2::unconfirmed_transfer_details::pending_not_in_pool && refreshed &&
+        now > std::chrono::system_clock::from_time_t(pit->second.m_sent_time) + tx_propagation_timeout)
       {
-        LOG_PRINT_L1("Pending txid " << txid << " not in pool, marking as failed");
+        LOG_PRINT_L1("Pending txid " << txid << " not in pool after " << tx_propagation_timeout.count() <<
+          " seconds, marking as failed");
         pit->second.m_state = wallet2::unconfirmed_transfer_details::failed;
 
         // the inputs aren't spent anymore, since the tx failed
@@ -3465,6 +3471,15 @@ void wallet2::refresh(bool trusted_daemon, uint64_t start_height, uint64_t & blo
           throw std::runtime_error("proxy exception in refresh thread");
       }
 
+      if (!next_blocks.empty())
+      {
+        const uint64_t expected_start_height = std::max(static_cast<uint64_t>(m_blockchain.size()), uint64_t(1)) - 1;
+        const uint64_t reorg_depth = expected_start_height - std::min(expected_start_height, next_blocks_start_height);
+        THROW_WALLET_EXCEPTION_IF(reorg_depth > m_max_reorg_depth, error::reorg_depth_error,
+          tr("reorg exceeds maximum allowed depth, use 'set max-reorg-depth N' to allow it, reorg depth: ") +
+          std::to_string(reorg_depth));
+      }
+
       // if we've got at least 10 blocks to refresh, assume we're starting
       // a long refresh, and setup a tracking output cache if we need to
       if (m_track_uses && (!output_tracker_cache || output_tracker_cache->empty()) && next_blocks.size() >= 10)
@@ -3484,6 +3499,11 @@ void wallet2::refresh(bool trusted_daemon, uint64_t start_height, uint64_t & blo
     catch (const error::payment_required&)
     {
       // no point in trying again, it'd just eat up credits
+      THROW_WALLET_EXCEPTION_IF(!waiter.wait(), error::wallet_internal_error, "Exception in thread pool");
+      throw;
+    }
+    catch (const error::reorg_depth_error&)
+    {
       THROW_WALLET_EXCEPTION_IF(!waiter.wait(), error::wallet_internal_error, "Exception in thread pool");
       throw;
     }
@@ -3768,7 +3788,7 @@ bool wallet2::store_keys(const std::string& keys_file_name, const epee::wipeable
 //----------------------------------------------------------------------------------------------------
 boost::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const epee::wipeable_string& password, bool watch_only)
 {
-  std::string account_data;
+  epee::byte_slice account_data;
   std::string multisig_signers;
   std::string multisig_derivations;
   cryptonote::account_base account = m_account;
@@ -3795,7 +3815,7 @@ boost::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const epee:
   rapidjson::Document json;
   json.SetObject();
   rapidjson::Value value(rapidjson::kStringType);
-  value.SetString(account_data.c_str(), account_data.length());
+  value.SetString(reinterpret_cast<const char*>(account_data.data()), account_data.size());
   json.AddMember("key_data", value, json.GetAllocator());
   if (!seed_language.empty())
   {
@@ -3862,6 +3882,9 @@ boost::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const epee:
 
   value2.SetInt(m_ask_password);
   json.AddMember("ask_password", value2, json.GetAllocator());
+
+  value2.SetUint64(m_max_reorg_depth);
+  json.AddMember("max_reorg_depth", value2, json.GetAllocator());
 
   value2.SetUint(m_min_output_count);
   json.AddMember("min_output_count", value2, json.GetAllocator());
@@ -3966,13 +3989,12 @@ boost::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const epee:
   rapidjson::StringBuffer buffer;
   rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
   json.Accept(writer);
-  account_data = buffer.GetString();
 
   // Encrypt the entire JSON object.
   std::string cipher;
-  cipher.resize(account_data.size());
+  cipher.resize(buffer.GetSize());
   keys_file_data.get().iv = crypto::rand<crypto::chacha_iv>();
-  crypto::chacha20(account_data.data(), account_data.size(), key, keys_file_data.get().iv, &cipher[0]);
+  crypto::chacha20(buffer.GetString(), buffer.GetSize(), key, keys_file_data.get().iv, &cipher[0]);
   keys_file_data.get().account_data = cipher;
   return keys_file_data;
 }
@@ -4081,6 +4103,7 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
     m_confirm_non_default_ring_size = true;
     m_ask_password = AskPasswordToDecrypt;
     cryptonote::set_default_decimal_point(CRYPTONOTE_DISPLAY_DECIMAL_POINT);
+    m_max_reorg_depth = ORPHANED_BLOCKS_MAX_COUNT;
     m_min_output_count = 0;
     m_min_output_value = 0;
     m_merge_destinations = false;
@@ -4233,6 +4256,8 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
     m_ask_password = field_ask_password;
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, default_decimal_point, int, Int, false, CRYPTONOTE_DISPLAY_DECIMAL_POINT);
     cryptonote::set_default_decimal_point(field_default_decimal_point);
+    GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, max_reorg_depth, uint64_t, Uint64, false, ORPHANED_BLOCKS_MAX_COUNT);
+    m_max_reorg_depth = field_max_reorg_depth;
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, min_output_count, uint32_t, Uint, false, 0);
     m_min_output_count = field_min_output_count;
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, min_output_value, uint64_t, Uint64, false, 0);
@@ -13377,6 +13402,20 @@ size_t wallet2::import_multisig(std::vector<cryptonote::blobdata> blobs)
       loaded = true;
     }
     CHECK_AND_ASSERT_THROW_MES(loaded, "Failed to load output data");
+
+    for (const auto &e: i)
+    {
+      for (const auto &lr: e.m_LR)
+      {
+        CHECK_AND_ASSERT_THROW_MES(rct::isInMainSubgroup(lr.m_L), "Multisig value is not in the main subgroup");
+        CHECK_AND_ASSERT_THROW_MES(rct::isInMainSubgroup(lr.m_R), "Multisig value is not in the main subgroup");
+      }
+      for (const auto &ki: e.m_partial_key_images)
+      {
+        CHECK_AND_ASSERT_THROW_MES(rct::isInMainSubgroup(rct::ki2rct(ki)), "Multisig partial key image is not in the main subgroup");
+      }
+    }
+
     MINFO(boost::format("%u outputs found") % boost::lexical_cast<std::string>(i.size()));
     info.push_back(std::move(i));
   }
@@ -14140,6 +14179,7 @@ std::vector<cryptonote::public_node> wallet2::get_public_nodes(bool white_only)
 
   req.white = true;
   req.gray = !white_only;
+  req.include_blocked = false;
 
   {
     const boost::lock_guard<boost::recursive_mutex> lock{m_daemon_rpc_mutex};

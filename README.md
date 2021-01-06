@@ -64,6 +64,7 @@ If you need help/support/info about translations, contact the localization workg
 | Type      | Status |
 |-----------|--------|
 | Coverity  | [![Coverity Status](https://scan.coverity.com/projects/9657/badge.svg)](https://scan.coverity.com/projects/9657/)
+| OSS Fuzz  | [![Fuzzing Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/monero.svg)](https://bugs.chromium.org/p/oss-fuzz/issues/list?sort=-opened&can=1&q=proj:monero)
 | Coveralls | [![Coveralls Status](https://coveralls.io/repos/github/monero-project/monero/badge.svg?branch=master)](https://coveralls.io/github/monero-project/monero?branch=master)
 | License   | [![License](https://img.shields.io/badge/license-BSD3-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
@@ -71,9 +72,9 @@ If you need help/support/info about translations, contact the localization workg
 
 Monero is a private, secure, untraceable, decentralised digital currency. You are your bank, you control your funds, and nobody can trace your transfers unless you allow them to do so.
 
-**Privacy:** Monero uses a cryptographically sound system to allow you to send and receive funds without your transactions being easily revealed on the blockchain (the ledger of transactions that everyone has). This ensures that your purchases, receipts, and all transfers remain absolutely private by default.
+**Privacy:** Monero uses a cryptographically sound system to allow you to send and receive funds without your transactions being easily revealed on the blockchain (the ledger of transactions that everyone has). This ensures that your purchases, receipts, and all transfers remain private by default.
 
-**Security:** Using the power of a distributed peer-to-peer consensus network, every transaction on the network is cryptographically secured. Individual wallets have a 25-word mnemonic seed that is only displayed once and can be written down to backup the wallet. Wallet files are encrypted with a passphrase to ensure they are useless if stolen.
+**Security:** Using the power of a distributed peer-to-peer consensus network, every transaction on the network is cryptographically secured. Individual wallets have a 25-word mnemonic seed that is only displayed once and can be written down to backup the wallet. Wallet files should be encrypted with a strong passphrase to ensure they are useless if ever stolen.
 
 **Untraceability:** By taking advantage of ring signatures, a special property of a certain type of cryptography, Monero is able to ensure that transactions are not only untraceable but have an optional measure of ambiguity that ensures that transactions cannot easily be tied back to an individual user or computer.
 
@@ -111,7 +112,7 @@ See [LICENSE](LICENSE).
 
 ## Contributing
 
-If you want to help out, see [CONTRIBUTING](CONTRIBUTING.md) for a set of guidelines.
+If you want to help out, see [CONTRIBUTING](docs/CONTRIBUTING.md) for a set of guidelines.
 
 ## Scheduled software upgrades
 
@@ -133,7 +134,7 @@ Dates are provided in the format YYYY-MM-DD.
 | 1788720                        | 2019-03-10 | v11               | v0.14.0.0              | v0.14.1.2                  | forbid old RingCT transaction format
 | 1978433                        | 2019-11-30* | v12                | v0.15.0.0              | v0.16.0.0                  | New PoW based on RandomX, only allow >= 2 outputs, change to the block median used to calculate penalty, v1 coinbases are forbidden, rct sigs in coinbase forbidden, 10 block lock time for incoming outputs
 | 2210000                        | 2020-10-17 | v13                | v0.17.0.0              | v0.17.1.1                  | New CLSAG transaction format
-| 2210720                        | 2020-10-18 | v14               | v0.17.1.1              | v0.17.1.1                  | forbid old MLSAG transaction format
+| 2210720                        | 2020-10-18 | v14               | v0.17.1.1              | v0.17.1.7                  | forbid old MLSAG transaction format
 | XXXXXXX                        | XXX-XX-XX | XXX                | vX.XX.X.X              | vX.XX.X.X                  | XXX |
 
 X's indicate that these details have not been determined as of commit date.
@@ -648,11 +649,11 @@ monero-wallet-cli, and possibly monerod, if you get crashes refreshing.
 
 ## Internationalization
 
-See [README.i18n.md](README.i18n.md).
+See [README.i18n.md](docs/README.i18n.md).
 
 ## Using Tor
 
-> There is a new, still experimental, [integration with Tor](ANONYMITY_NETWORKS.md). The
+> There is a new, still experimental, [integration with Tor](docs/ANONYMITY_NETWORKS.md). The
 > feature allows connecting over IPv4 and Tor simultaneously - IPv4 is used for
 > relaying blocks and relaying transactions received by peers whereas Tor is
 > used solely for relaying transactions received over local RPC. This provides
@@ -685,6 +686,9 @@ Example command line to start monerod through Tor:
 ```bash
 DNS_PUBLIC=tcp torsocks monerod --p2p-bind-ip 127.0.0.1 --no-igd
 ```
+
+A helper script is in contrib/tor/monero-over-tor.sh. It assumes Tor is installed
+already, and runs Tor and Monero with the right configuration.
 
 ### Using Tor on Tails
 
